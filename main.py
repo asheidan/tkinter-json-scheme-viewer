@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
-from collections.abc import Sequence
+from collections import OrderedDict
+import json
+import sys
 from tkinter import ttk
 import tkinter as tk
 import tkinter.font as tk_font
-from typing import Optional
+from typing import List, Optional, Sequence, Tuple
 
 STRUCTURE = [
     ("Representation", "", [
@@ -97,10 +99,47 @@ class Application(tk.Frame):
         self.tree_view.bind('<KeyPress-T>', self.toggle_type_column)
 
 
+class JSONSchemaDraft4:
+    @classmethod
+    def from_json(cls, json_structure) -> "JSONSchemaDraft4":
+        return cls(
+            type=json_structure.get("type"),
+            properties=OrderedDict((k, cls.from_json(v)) for k, v in json_structure.get("properties", {}).items())
+        )
+
+    def __init__(self, type: str, properties: OrderedDict) -> None:
+        self.type = type
+        self.properties = properties
+
+
+    def as_structure(self, name=None) -> Tuple:
+        print(repr(self.properties))
+        return (name, self.type, [p.as_structure(k) for k, p in self.properties.items()])
+
+
+def parse_json_schema(filename: str) -> List:
+    with open(filename, "r") as json_file:
+        data = json.load(json_file, object_pairs_hook=OrderedDict)
+
+    import pprint
+    #pprint.pprint(data)
+
+    versions = {
+        "http://json-schema.org/draft-04/schema#": JSONSchemaDraft4,
+    }
+
+    schema = versions[data.get("$schema")].from_json(data)
+    pprint.pprint(schema.as_structure())
+
 
 def main() -> None:
     #root: tk.Tk = tk.Tk()
     #root.mainloop()
+
+    if 1 < len(sys.argv):
+        structure = parse_json_schema(sys.argv[1])
+
+    return
 
     app = Application()
     app.master.title("Foo")
