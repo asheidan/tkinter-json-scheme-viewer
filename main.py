@@ -90,6 +90,7 @@ class Application(tk.Frame):
 
         self.tree_view.bind('<KeyPress-T>', self.toggle_type_column)
 
+
 class JSONSchema:
     schema_version = None
 
@@ -128,22 +129,38 @@ class JSONSchemaDraft4(JSONSchema):
 
     @classmethod
     def from_json(cls, json_structure) -> "JSONSchemaDraft4":
-        type_info = json_structure.get("type")
+        name = json_structure.get("title")
+
+        type_info = json_structure.get("type", "")
+        if 'object' == type_info:
+            if object_title := json_structure.get("title"):
+                type_info = object_title
+
+                # Some schemas add this as a suffix to all classes which I don't want to see
+                # TODO: Move this to a setting
+                type_info = type_info.replace("Representation", "")
 
         if "array" == type_info:
-            properties = {"items": JSONSchema.from_json(json_structure.get("items", {}), version=cls.schema_version)}
+            item_schema = JSONSchema.from_json(json_structure.get("items", {}), version=cls.schema_version)
+            type_info += f"<{item_schema.type_info}>"
+            properties = {"items": item_schema}
         else:
             properties = OrderedDict((k, JSONSchema.from_json(v, version=cls.schema_version)) for k, v in json_structure.get("properties", {}).items())
 
-        return cls(type_info=json_structure.get("type", ""), properties=properties)
+        if "string" == type_info:
+            if type_format := json_structure.get("format"):
+                type_info += f"<{type_format}>"
 
-    def __init__(self, type_info: str, properties: OrderedDict) -> None:
+        return cls(name=name, type_info=type_info, properties=properties)
+
+    def __init__(self, type_info: str, properties: OrderedDict, name: Optional[str] = None) -> None:
+        self.name = name
         self.type_info = type_info
         self.properties = properties
 
     def as_structure(self, name=None) -> Tuple:
         #print(repr(self.properties))
-        return (name, self.type_info, [p.as_structure(k) for k, p in self.properties.items()])
+        return (name or self.name, self.type_info, [p.as_structure(k) for k, p in self.properties.items()])
 
 
 class cd:
