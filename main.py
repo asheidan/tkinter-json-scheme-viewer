@@ -2,31 +2,23 @@
 
 from collections import OrderedDict
 import json
+import os, os.path
 import sys
 from tkinter import ttk
 import tkinter as tk
 import tkinter.font as tk_font
-from typing import List, Optional, Sequence, Tuple
-
-STRUCTURE = [
-    ("Representation", "", [
-        ("id", "string<uuid>"),
-        ("apa", "integer"),
-        ("bepa", "list<string>"),
-        ("some_list", "list<Foo>", [
-            ("id", "integer"),
-        ]),
-    ])
-]
+from typing import Dict, List, Optional, Sequence, Tuple
 
 
-def append_to(tree, parent: str = "", text: Optional[str] = None, tags: Sequence = (), values: Sequence = ()) -> str:
+def append_to(tree, text: str, parent: str = "", tags: Sequence = (), values: Sequence = ()) -> str:
     return tree.insert(parent=parent, index="end", text=text, values=values, tags=tags, open=True)
 
 
 class Application(tk.Frame):
-    def __init__(self, master=None):
+    def __init__(self, master=None, structure=()):
         super().__init__(master=master)
+
+        self.structure = structure
 
         self.default_font = tk_font.nametofont("TkDefaultFont")
         self.default_font.configure(size=-11)
@@ -62,13 +54,13 @@ class Application(tk.Frame):
         #self.tree_view.grid()
         self.tree_view.pack(fill='both')
 
-        self.parse_structure(structure=STRUCTURE)
+        self.parse_structure(structure=self.structure)
 
     def parse_structure(self, structure, parent=""):
-        for name, type_description, *children in structure:
-            current = append_to(self.tree_view, parent=parent, text=name, values=(type_description,), tags=('parent',) if children else ())
-            if children:
-                self.parse_structure(parent=current, structure=children[0])
+        for name, type_description, properties in structure:
+            current = append_to(tree=self.tree_view, parent=parent, text=(name or ""), values=[type_description], tags=('parent',) if properties else ())
+            if properties:
+                self.parse_structure(parent=current, structure=properties)
 
     def toggle_type_column(self, event: tk.Event):
         widget = event.widget
@@ -98,38 +90,76 @@ class Application(tk.Frame):
 
         self.tree_view.bind('<KeyPress-T>', self.toggle_type_column)
 
+class JSONSchema:
+    schema_version = None
 
-class JSONSchemaDraft4:
+    @classmethod
+    def from_json(cls, json_structure: Dict, version=None) -> "JSONSchema":
+        if ref := json_structure.get("$ref"):
+            if "#" != ref[0]:
+
+                return cls.from_file(ref)
+
+        schema_version = json_structure.get("$schema") or version
+        schema_class = None
+        for subclass in JSONSchema.__subclasses__():
+            if schema_version == subclass.schema_version:
+                schema_class = subclass
+
+                break
+
+        schema = schema_class.from_json(json_structure)
+
+        return schema
+
+    @classmethod
+    def from_file(cls, filename) -> "JSONSchema":
+        with open(filename, "r") as json_file:
+            data = json.load(json_file, object_pairs_hook=OrderedDict)
+
+        with cd(os.path.dirname(filename)):
+            schema = JSONSchema.from_json(data)
+
+        return schema
+
+
+class JSONSchemaDraft4(JSONSchema):
+    schema_version = "http://json-schema.org/draft-04/schema#"
+
     @classmethod
     def from_json(cls, json_structure) -> "JSONSchemaDraft4":
-        return cls(
-            type=json_structure.get("type"),
-            properties=OrderedDict((k, cls.from_json(v)) for k, v in json_structure.get("properties", {}).items())
-        )
+        type_info = json_structure.get("type")
 
-    def __init__(self, type: str, properties: OrderedDict) -> None:
-        self.type = type
+        if "array" == type_info:
+            properties = {"items": JSONSchema.from_json(json_structure.get("items", {}), version=cls.schema_version)}
+        else:
+            properties = OrderedDict((k, JSONSchema.from_json(v, version=cls.schema_version)) for k, v in json_structure.get("properties", {}).items())
+
+        return cls(type_info=json_structure.get("type", ""), properties=properties)
+
+    def __init__(self, type_info: str, properties: OrderedDict) -> None:
+        self.type_info = type_info
         self.properties = properties
 
-
     def as_structure(self, name=None) -> Tuple:
-        print(repr(self.properties))
-        return (name, self.type, [p.as_structure(k) for k, p in self.properties.items()])
+        #print(repr(self.properties))
+        return (name, self.type_info, [p.as_structure(k) for k, p in self.properties.items()])
 
 
-def parse_json_schema(filename: str) -> List:
-    with open(filename, "r") as json_file:
-        data = json.load(json_file, object_pairs_hook=OrderedDict)
+class cd:
+    def __init__(self, path):
+        self.path = os.path.abspath(path)
+        self.previous_path = None
 
-    import pprint
-    #pprint.pprint(data)
+    def __enter__(self):
+        self.previous_path = os.getcwd()
+        # print(f"cd: {self.previous_path} -> {self.path}", file=sys.stderr)
+        os.chdir(self.path)
 
-    versions = {
-        "http://json-schema.org/draft-04/schema#": JSONSchemaDraft4,
-    }
+        return self
 
-    schema = versions[data.get("$schema")].from_json(data)
-    pprint.pprint(schema.as_structure())
+    def __exit__(self, ex_type, ex_value, ex_traceback):
+        os.chdir(self.previous_path)
 
 
 def main() -> None:
@@ -137,11 +167,12 @@ def main() -> None:
     #root.mainloop()
 
     if 1 < len(sys.argv):
-        structure = parse_json_schema(sys.argv[1])
+        schema = JSONSchema.from_file(sys.argv[1])
 
-    return
+    from pprint import pprint
+    pprint(schema.as_structure())
 
-    app = Application()
+    app = Application(structure=[schema.as_structure()])
     app.master.title("Foo")
 
     app.mainloop()
