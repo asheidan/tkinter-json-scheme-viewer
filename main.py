@@ -102,7 +102,7 @@ class JSONSchema:
                 return cls.from_file(ref)
 
         schema_version = json_structure.get("$schema") or version
-        schema_class = None
+        schema_class = JSONSchemaDraft4
         for subclass in JSONSchema.__subclasses__():
             if schema_version == subclass.schema_version:
                 schema_class = subclass
