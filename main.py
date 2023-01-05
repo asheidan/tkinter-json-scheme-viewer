@@ -48,6 +48,7 @@ class Application(tk.Frame):
 
         #self.tree_view.heading('Name', text='Name')
         self.tree_view.heading('Type', text='Type')
+        #self.tree_view.heading('Description', text='Description')
 
         self.tree_view.column(0, stretch=True)
 
@@ -102,6 +103,8 @@ class JSONSchema:
                 return cls.from_file(ref)
 
         schema_version = json_structure.get("$schema") or version
+
+        # Use draft-04 as the default until we have multiple versions
         schema_class = JSONSchemaDraft4
         for subclass in JSONSchema.__subclasses__():
             if schema_version == subclass.schema_version:
@@ -118,6 +121,10 @@ class JSONSchema:
         with open(filename, "r") as json_file:
             data = json.load(json_file, object_pairs_hook=OrderedDict)
 
+        # Uses the fact that we are single threaded to change to the directory
+        # of the file we are reading to be able to handle relative paths in the
+        # schemas. This is not a nice way of solving it, but it works as long
+        # as we are running in a single thread.
         with cd(os.path.dirname(filename)):
             schema = JSONSchema.from_json(data)
 
@@ -147,9 +154,12 @@ class JSONSchemaDraft4(JSONSchema):
         else:
             properties = OrderedDict((k, JSONSchema.from_json(v, version=cls.schema_version)) for k, v in json_structure.get("properties", {}).items())
 
-        if "string" == type_info:
-            if type_format := json_structure.get("format"):
-                type_info += f"<{type_format}>"
+        if additional_properties := json_structure.get("additionalProperties"):
+            if isinstance(additional_properties, OrderedDict):
+                properties["..."] = JSONSchema.from_json(additional_properties, version=cls.schema_version)
+
+        if type_format := json_structure.get("format"):
+            type_info += f"<{type_format}>"
 
         return cls(name=name, type_info=type_info, properties=properties)
 
@@ -186,8 +196,8 @@ def main() -> None:
     if 1 < len(sys.argv):
         schema = JSONSchema.from_file(sys.argv[1])
 
-    from pprint import pprint
-    pprint(schema.as_structure())
+    #from pprint import pprint
+    #pprint(schema.as_structure())
 
     app = Application(structure=[schema.as_structure()])
     app.master.title("Foo")
