@@ -47,7 +47,7 @@ class Application(tk.Frame):
         style = ttk.Style(self)
 
         #print(style.theme_names())
-        #style.theme_use('classic')
+        #style.theme_use('alt')
 
         # print(tk_font.families())
         self.default_font = tk_font.nametofont("TkDefaultFont")
@@ -55,8 +55,9 @@ class Application(tk.Frame):
         #tk_font.nametofont("TkBoldFont").configure(size=-11)
         #mono_font = tk_font.Font( #family="Fira Code", size=-11,)
         font_bold = tk_font.Font(weight='bold', size=-11)
+        font_smaller = tk_font.Font(size=-9)
 
-        style.configure('Treeview', rowheight=17)
+        style.configure('Treeview', rowheight=17, indent=10)
         style.configure('Treeview.Heading', font=self.default_font)
 
         self.panes = tk.PanedWindow(self, orient=tk.HORIZONTAL)
@@ -66,8 +67,8 @@ class Application(tk.Frame):
         self.tree_view = ttk.Treeview(self.panes, height=50, selectmode="browse", takefocus=1,
                                       columns=("Type",), displaycolumns=('Type',), show="tree")
         self.tree_view.tag_configure('parent', font=font_bold)
-        self.tree_view.tag_configure('definitions', foreground='#bbb')
-        self.tree_view.tag_configure('properties', foreground='#77b')
+        self.tree_view.tag_configure('definitions', font=font_smaller, foreground='#999')
+        self.tree_view.tag_configure('properties', font=font_smaller, foreground='#77b')
         self.tree_view.heading('Type', text='Type')
         self.tree_view.column('#0', stretch=True, minwidth=200)
         self.tree_view.column('Type', stretch=False,
@@ -91,12 +92,38 @@ class Application(tk.Frame):
 
         if properties:
             required_properties = schema.details.get("required", ())
-            property_node = append_to(tree=self.tree_view, parent=current_root, text="properties", tags=('properties',))
+            parent_node = append_to(tree=self.tree_view, parent=current_root, text="properties", tags=('properties',))
             for key, property_schema in properties.items():
                 is_required = key in required_properties
                 required_indicator = " *" if is_required else ""
                 #current = append_to(tree=self.tree_view, parent=current_root, text=key)
-                self.add_schema(parent=property_node, schema=property_schema, name=key + required_indicator)
+                self.add_schema(parent=parent_node, schema=property_schema, name=key + required_indicator)
+
+        if schema.additional_properties is not None:
+            #print("add_schema", schema.additional_properties, file=sys.stderr)
+            match schema.additional_properties:
+                case bool():
+
+                    append_to(tree=self.tree_view, parent=current_root,
+                              text="additionalProperties", values=(schema.additional_properties,),
+                              tags=('properties',))
+                case OrderedDict():
+                    parent_node = append_to(tree=self.tree_view, parent=current_root,
+                                            text="additionalProperties", tags=('properties',))
+                    for key, property_schema in schema.additional_properties.items():
+                        #current = append_to(tree=self.tree_view, parent=current_root, text=key)
+                        self.add_schema(parent=parent_node, schema=property_schema, name=key)
+                case _:  # Probably JSONSchema
+                    parent_node = append_to(tree=self.tree_view, parent=current_root,
+                                            text="additionalProperties", tags=('properties',))
+                    self.add_schema(schema=schema.additional_properties, parent=parent_node)
+
+        if schema.pattern_properties:
+            parent_node = append_to(tree=self.tree_view, parent=current_root, text="patternProperties", tags=('properties',))
+            for key, property_schema in schema.pattern_properties.items():
+                #current = append_to(tree=self.tree_view, parent=current_root, text=key)
+                self.add_schema(parent=parent_node, schema=property_schema, name=key)
+
 
         if schema.definitions:
             definitions = append_to(tree=self.tree_view, parent=current_root, text="definitions", tags=('definitions',), open=False)
@@ -135,7 +162,7 @@ class Application(tk.Frame):
 
         if selected_schema := self.tree_to_schema.get(selected_id):
             for key, value in selected_schema.details.items():
-                if key in ("properties", "items"):
+                if key in ("definitions", "properties", "patternProperties", "additionalProperties", "items"):
 
                     continue
 
@@ -204,13 +231,19 @@ class JSONSchema:
 
         return schema
 
-    def __init__(self, type_info: str, properties: OrderedDict, name: Optional[str] = None,
+    def __init__(self, type_info: str,
+                 properties: OrderedDict, additional_properties: OrderedDict,
+                 pattern_properties: Optional[OrderedDict] = None,
+                 name: Optional[str] = None,
                  definitions: Optional[OrderedDict] = None, details: Optional[Dict] = None,
                  ) -> None:
         self.name = name
         self.type_info = type_info
 
         self.properties = properties
+        self.additional_properties = additional_properties
+        self.pattern_properties = pattern_properties
+
         self.definitions = definitions
 
         self.details = details
@@ -219,7 +252,8 @@ class JSONSchema:
         return self.name or ""
 
     def treeview_values(self) -> Tuple:
-        return (self.type_info,)
+        k = "$ref"
+        return (self.type_info or (k if k in self.details else ""),)
 
     def _as_structure(self, name=None) -> Tuple:
         #print(repr(self.properties))
@@ -231,6 +265,7 @@ class JSONSchemaDraft4(JSONSchema):
 
     @classmethod
     def from_json(cls, json_structure) -> "JSONSchemaDraft4":
+        # TODO: This should all be moved to the main class.
         name = json_structure.get("title")
 
         type_info = json_structure.get("type", "")
@@ -250,19 +285,27 @@ class JSONSchemaDraft4(JSONSchema):
             properties = OrderedDict((k, JSONSchema.from_json(v, version=cls.schema_version))
                                      for k, v in json_structure.get("properties", {}).items())
 
-        if additional_properties := json_structure.get("additionalProperties", {}):
-            if isinstance(additional_properties, OrderedDict):
-                properties["..."] = JSONSchema.from_json(additional_properties, version=cls.schema_version)
-
         if type_format := json_structure.get("format"):
             type_info += f"<{type_format}>"
+
+        additional_properties = json_structure.get("additionalProperties")
+        #if additional_properties is not None:
+        #    print("from_json", additional_properties, file=sys.stderr)
+        if isinstance(additional_properties, OrderedDict):
+            additional_properties = JSONSchema.from_json(additional_properties, version=cls.schema_version)
+
+        if pattern_properties := json_structure.get("patternProperties"):
+            pattern_properties = OrderedDict((k, JSONSchema.from_json(v, version=cls.schema_version))
+                                             for k, v in pattern_properties.items())
 
         if definitions := json_structure.get("definitions"):
             definitions = OrderedDict((k, JSONSchema.from_json(v, version=cls.schema_version))
                                       for k, v in definitions.items())
 
-        return cls(name=name, type_info=type_info, properties=properties, definitions=definitions,
-                   details=json_structure)
+        return cls(name=name, type_info=type_info,
+                   properties=properties, additional_properties=additional_properties,
+                   pattern_properties=pattern_properties,
+                   definitions=definitions, details=json_structure)
 
 
 class cd:
