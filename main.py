@@ -10,61 +10,104 @@ import tkinter.font as tk_font
 from typing import Dict, List, Optional, Sequence, Tuple
 
 
-def append_to(tree, text: str, parent: str = "", tags: Sequence = (), values: Sequence = ()) -> str:
-    return tree.insert(parent=parent, index="end", text=text, values=values, tags=tags, open=True)
+def append_to(tree, text: str, parent: str = "", tags: Sequence = (), values: Sequence = (), open=True) -> str:
+    return tree.insert(parent=parent, index="end", text=text, values=values, tags=tags, open=open)
 
 
 class Application(tk.Frame):
-    def __init__(self, master=None, structure=()):
+    TYPE_COLUMN_WIDTH = 100
+
+    def __init__(self, schema: "JSONSchema", master=None):
         super().__init__(master=master)
 
-        self.structure = structure
+        self.schema = schema
 
-        self.default_font = tk_font.nametofont("TkDefaultFont")
-        self.default_font.configure(size=-11)
-        #tk_font.nametofont("TkBoldFont").configure(size=-11)
+        self.tree_to_schema = {}
 
-        #self.grid()
-        self.pack(fill='both')
+        self.winfo_toplevel().resizable(True, True)
+        #self.columnconfigure(1, weight=1)
+        #self.grid(sticky="news")
+        #self.pack(fill='both')
 
         self.create_widgets()
         self.bind_keys()
+
+        root_item = self.add_schema(schema=self.schema)
+        #self.after(0, lambda: self.tree_view.focus(root_item))
+
+        self.pack(fill=tk.BOTH)
+
+        self.tree_view.grab_set()
+        #print(self.grab_current(), file=sys.stderr)
+        self.tree_view.selection_set(root_item)
+        self.tree_view.focus(root_item)
+        self.tree_view.focus_force()
 
     def create_widgets(self):
         style = ttk.Style(self)
 
         #print(style.theme_names())
-        #style.theme_use('alt')
+        #style.theme_use('classic')
+
+        # print(tk_font.families())
+        self.default_font = tk_font.nametofont("TkDefaultFont")
+        self.default_font.configure(size=-11)
+        #tk_font.nametofont("TkBoldFont").configure(size=-11)
+        #mono_font = tk_font.Font( #family="Fira Code", size=-11,)
+        font_bold = tk_font.Font(weight='bold', size=-11)
 
         style.configure('Treeview', rowheight=17)
         style.configure('Treeview.Heading', font=self.default_font)
 
-        # print(tk_font.families())
-        #mono_font = tk_font.Font( #family="Fira Code", size=-11,)
-        font_bold = tk_font.Font(weight='bold', size=-11)
+        self.panes = tk.PanedWindow(self, orient=tk.HORIZONTAL)
+        self.panes.pack(fill=tk.BOTH, expand=1)
 
-        self.tree_view = ttk.Treeview(self, columns=("Type",), height=50, selectmode="browse", displaycolumns=('Type',))  # , show="tree")
+        # treeview pane
+        self.tree_view = ttk.Treeview(self.panes, height=50, selectmode="browse", takefocus=1,
+                                      columns=("Type",), displaycolumns=('Type',), show="tree")
         self.tree_view.tag_configure('parent', font=font_bold)
-
-        #self.tree_view.heading('Name', text='Name')
+        self.tree_view.tag_configure('definitions', foreground='#bbb')
+        self.tree_view.tag_configure('properties', foreground='#77b')
         self.tree_view.heading('Type', text='Type')
-        #self.tree_view.heading('Description', text='Description')
+        self.tree_view.column('#0', stretch=True, minwidth=200)
+        self.tree_view.column('Type', stretch=False,
+                              minwidth=self.TYPE_COLUMN_WIDTH, width=self.TYPE_COLUMN_WIDTH)
+        self.panes.add(self.tree_view, minsize=200)
 
-        self.tree_view.column(0, stretch=True)
+        # details pane
+        self.details = ttk.Treeview(self.panes, selectmode="none", show="tree", columns=("Value",),
+                                    takefocus=False)
+        self.details.column('#0', stretch=False, width=100, minwidth=100, anchor="e")
+        self.details.column('Value', stretch=True, minwidth=100)
+        self.panes.add(self.details)
 
-        #self.tree_view.grid()
-        self.tree_view.pack(fill='both')
+    def add_schema(self, schema: "JSONSchema", parent: str = "", name: str = "") -> str:
+        properties = schema.properties
+        current_root = append_to(tree=self.tree_view, parent=parent,
+                                 text=schema.treeview_text() or name,
+                                 values=schema.treeview_values(),
+                                 tags=('parent',) if properties else ())
+        self.tree_to_schema[current_root] = schema
 
-        self.parse_structure(structure=self.structure)
+        if properties:
+            required_properties = schema.details.get("required", ())
+            property_node = append_to(tree=self.tree_view, parent=current_root, text="properties", tags=('properties',))
+            for key, property_schema in properties.items():
+                is_required = key in required_properties
+                required_indicator = " *" if is_required else ""
+                #current = append_to(tree=self.tree_view, parent=current_root, text=key)
+                self.add_schema(parent=property_node, schema=property_schema, name=key + required_indicator)
 
-    def parse_structure(self, structure, parent=""):
-        for name, type_description, properties in structure:
-            current = append_to(tree=self.tree_view, parent=parent, text=(name or ""), values=[type_description], tags=('parent',) if properties else ())
-            if properties:
-                self.parse_structure(parent=current, structure=properties)
+        if schema.definitions:
+            definitions = append_to(tree=self.tree_view, parent=current_root, text="definitions", tags=('definitions',), open=False)
+            for key, definition_schema in schema.definitions.items():
+                self.add_schema(parent=definitions, schema=definition_schema, name=key)
 
-    def toggle_type_column(self, event: tk.Event):
-        widget = event.widget
+        return current_root
+
+    def toggle_type_column(self, event: tk.Event) -> None:
+        #widget = event.widget
+        widget = self.tree_view
 
         # This should only be a widget with columns
         display_columns = widget["displaycolumns"]
@@ -74,22 +117,44 @@ class Application(tk.Frame):
                 widget["displaycolumns"] = []
             case '':
                 widget["displaycolumns"] = ('Type',)
-                widget.column('Type', width=int(widget.winfo_width()/(len(widget["displaycolumns"])+1)))
+                widget.column('Type', width=self.TYPE_COLUMN_WIDTH)
             case other:
                 if 'Type' in other:
                     widget["displaycolumns"] = tuple(c for c in other if c != 'Type')
+                    widget.column('#0', width=widget.column('#0')['width'] + self.TYPE_COLUMN_WIDTH)
                 else:
                     widget["displaycolumns"] = other + ('Type',)
+                    widget.column('Type', width=self.TYPE_COLUMN_WIDTH)
 
+    def update_selection(self, event: tk.Event) -> None:
+        selection = self.tree_view.selection()
+        selected_id = selection[0]
 
+        # Let's clear and add to see if we get flickering and have to optimize
+        self.details.delete(*self.details.get_children())
+
+        if selected_schema := self.tree_to_schema.get(selected_id):
+            for key, value in selected_schema.details.items():
+                if key in ("properties", "items"):
+
+                    continue
+
+                formatted_value = value
+                if isinstance(value, (list, dict, OrderedDict)):
+                    formatted_value = json.dumps(value)  # , indent=2)
+                append_to(self.details, text=key + ":", values=(formatted_value,))
 
     def bind_keys(self):
-        self.tree_view.bind('<KeyPress-j>', lambda event: event.widget.event_generate('<Down>', when='tail'))
-        self.tree_view.bind('<KeyPress-k>', lambda event: event.widget.event_generate('<Up>', when='tail'))
-        self.tree_view.bind('<KeyPress-h>', lambda event: event.widget.event_generate('<Left>', when='tail'))
-        self.tree_view.bind('<KeyPress-l>', lambda event: event.widget.event_generate('<Right>', when='tail'))
+        widget = self.tree_view
+
+        self.tree_view.bind('<KeyPress-j>', lambda _event: widget.event_generate('<Down>', when='tail'))
+        self.tree_view.bind('<KeyPress-k>', lambda _event: widget.event_generate('<Up>', when='tail'))
+        self.tree_view.bind('<KeyPress-h>', lambda _event: widget.event_generate('<Left>', when='tail'))
+        self.tree_view.bind('<KeyPress-l>', lambda _event: widget.event_generate('<Right>', when='tail'))
 
         self.tree_view.bind('<KeyPress-T>', self.toggle_type_column)
+
+        self.tree_view.bind('<<TreeviewSelect>>', self.update_selection)
 
 
 class JSONSchema:
@@ -98,9 +163,18 @@ class JSONSchema:
     @classmethod
     def from_json(cls, json_structure: Dict, version=None) -> "JSONSchema":
         if ref := json_structure.get("$ref"):
-            if "#" != ref[0]:
-
+            if "#" == ref[0]:
+                pass
+            elif ref.startswith("http"):
+                pass
+            else:
                 return cls.from_file(ref)
+
+            # TODO: Add possibility to jump to "local" definitions.
+            # This will prevent the possibility of infinite loops.
+            # Maybe adding a stack with historic positions which are pushed
+            # when navigating to a reference and then pop the stack when
+            # returning.
 
         schema_version = json_structure.get("$schema") or version
 
@@ -130,6 +204,27 @@ class JSONSchema:
 
         return schema
 
+    def __init__(self, type_info: str, properties: OrderedDict, name: Optional[str] = None,
+                 definitions: Optional[OrderedDict] = None, details: Optional[Dict] = None,
+                 ) -> None:
+        self.name = name
+        self.type_info = type_info
+
+        self.properties = properties
+        self.definitions = definitions
+
+        self.details = details
+
+    def treeview_text(self) -> str:
+        return self.name or ""
+
+    def treeview_values(self) -> Tuple:
+        return (self.type_info,)
+
+    def _as_structure(self, name=None) -> Tuple:
+        #print(repr(self.properties))
+        return (name or self.name, [self.type_info], [p._as_structure(k) for k, p in self.properties.items()])
+
 
 class JSONSchemaDraft4(JSONSchema):
     schema_version = "http://json-schema.org/draft-04/schema#"
@@ -152,25 +247,22 @@ class JSONSchemaDraft4(JSONSchema):
             type_info += f"<{item_schema.type_info}>"
             properties = {"items": item_schema}
         else:
-            properties = OrderedDict((k, JSONSchema.from_json(v, version=cls.schema_version)) for k, v in json_structure.get("properties", {}).items())
+            properties = OrderedDict((k, JSONSchema.from_json(v, version=cls.schema_version))
+                                     for k, v in json_structure.get("properties", {}).items())
 
-        if additional_properties := json_structure.get("additionalProperties"):
+        if additional_properties := json_structure.get("additionalProperties", {}):
             if isinstance(additional_properties, OrderedDict):
                 properties["..."] = JSONSchema.from_json(additional_properties, version=cls.schema_version)
 
         if type_format := json_structure.get("format"):
             type_info += f"<{type_format}>"
 
-        return cls(name=name, type_info=type_info, properties=properties)
+        if definitions := json_structure.get("definitions"):
+            definitions = OrderedDict((k, JSONSchema.from_json(v, version=cls.schema_version))
+                                      for k, v in definitions.items())
 
-    def __init__(self, type_info: str, properties: OrderedDict, name: Optional[str] = None) -> None:
-        self.name = name
-        self.type_info = type_info
-        self.properties = properties
-
-    def as_structure(self, name=None) -> Tuple:
-        #print(repr(self.properties))
-        return (name or self.name, self.type_info, [p.as_structure(k) for k, p in self.properties.items()])
+        return cls(name=name, type_info=type_info, properties=properties, definitions=definitions,
+                   details=json_structure)
 
 
 class cd:
@@ -199,7 +291,7 @@ def main() -> None:
     #from pprint import pprint
     #pprint(schema.as_structure())
 
-    app = Application(structure=[schema.as_structure()])
+    app = Application(schema=schema)
     app.master.title("Foo")
 
     app.mainloop()
