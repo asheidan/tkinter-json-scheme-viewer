@@ -92,6 +92,10 @@ class Application(tk.Frame):
 
         if properties:
             required_properties = schema.details.get("required", ())
+            # I don't know what required: bool means so we'll not render anything extra
+            if isinstance(required_properties, bool):
+                required_properties = ()
+
             parent_node = append_to(tree=self.tree_view, parent=current_root, text="properties", tags=('properties',))
             for key, property_schema in properties.items():
                 is_required = key in required_properties
